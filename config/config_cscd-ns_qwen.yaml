@@ -1,0 +1,44 @@
+# 中文错别字纠正项目配置文件
+# CUDA_VISIBLE_DEVICES=0 python main.py --config config/config_cscd-ns_qwen.yaml --mode full
+# 数据集配置
+dataset:
+  path: "/home/yangchunhao/csc/datasets/cscd-ns/test.txt"  # 本地数据文件路径
+  format: "csc"  # 数据格式：[source]\t[target]
+
+# Prompt配置
+prompts:
+  file_path: "prompts/prompts.json"
+  name: "csc_icl"
+  tokenizer_path: "/data/images/llms/Qwen/Qwen2.5-7B-Instruct"
+  
+# 模型配置
+model:
+  model_name: "/data/images/llms/Qwen/Qwen2.5-7B-Instruct"  # 模型名称或路径
+  backend: "vllm"  # 推理后端：vllm 或 huggingface
+  max_tokens: 512  # 最大生成token数
+  temperature: 0  # 温度参数
+  top_p: 0.9  # top-p采样参数
+  gpu_memory_utilization: 0.9  # GPU内存使用率
+  tensor_parallel_size: 1  # 张量并行大小
+  max_model_len: 2048
+  
+# 评估配置
+evaluation:
+  output_dir: "results/Qwen2.5-7B-Instruct_cscd-ns-test"
+  ignore_punct: true
+  
+# 训练/推理配置
+pipeline:
+  type: "icl"  # 推理类型：icl (in-context learning)
+  max_samples: null  # 最大样本数，null表示使用全部数据
+  output_dir: "results/Qwen2.5-7B-Instruct_cscd-ns-test"
+  # resume_from_checkpoint: true  # 是否从断点恢复
+  # checkpoint_dir: "checkpoints"
+  # save_interval: 100  # 每多少个样本保存一次checkpoint
+  
+# 日志配置
+logging:
+  level: "INFO"
+  file_path: "logs/csc.log"
+  console: true
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

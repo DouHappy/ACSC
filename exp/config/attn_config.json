@@ -1,0 +1,5 @@
+{
+    "attn_dir": "/home/yangchunhao/csc/exp/attn_target",
+    "data_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test/checkpoints/csc.json",
+    "tokenizer_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct"
+}

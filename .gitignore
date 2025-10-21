@@ -1,0 +1,9 @@
+results/
+heatmap/
+exp/attn_target
+exp/attn
+exp/analy_res
+exp/attn_cscd-ns_train_vl_step/
+datasets/
+exp/p2p/
+test.ipynb
