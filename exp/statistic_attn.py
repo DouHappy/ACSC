@@ -99,7 +99,7 @@ def get_edit_operations(src_tokens, tgt_tokens):
     operations.reverse()
     return operations
 
-def statistic_attn(datas, save_path, batchsize=16, process_start_id=None):
+def statistic_attn(datas, save_path, batchsize=16, process_start_id=0):
     # 获取message
     global tokenizer, model
     messages: list[Any] = get_message(datas)
@@ -232,8 +232,6 @@ def load_attention_data(save_path, batch_id=None):
 
 if __name__ == "__main__":
     load_model(model_path = "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct", device_ids = "6")
-    datas = load_input(message_path= "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json", max_len=5000)
+    datas = load_input(message_path= "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json", max_len=5000)
     
-    statistic_attn(datas, save_path = "/home/yangchunhao/csc/exp/attn_cscd-ns_train_vl_step", batchsize=6, process_start_id=3858)
-
-    
+    statistic_attn(datas, save_path = "/home/yangchunhao/csc/exp/attn/cscd-ns_test_vl_step/src_tgt", batchsize=6)
