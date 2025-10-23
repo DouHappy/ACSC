@@ -1,0 +1,75 @@
+{
+  "dataset": {
+    "splits": {
+      "train": [
+        {
+          "path": "../p2p/cscd-ns/test/normal_token.npy",
+          "label": 0
+        },
+        {
+          "path": "../p2p/cscd-ns/test/first_diff_token.npy",
+          "label": 1
+        }
+      ],
+      "test": [
+        {
+          "path": "../p2p/cscd-ns/test/normal_token.npy",
+          "label": 0
+        },
+        {
+          "path": "../p2p/cscd-ns/test/first_diff_token.npy",
+          "label": 1
+        }
+      ],
+      "validation": [
+        {
+          "path": "../p2p/cscd-ns/test/normal_token.npy",
+          "label": 0
+        },
+        {
+          "path": "../p2p/cscd-ns/test/first_diff_token.npy",
+          "label": 1
+        }
+      ]
+    }
+  },
+  "vectorizer": {
+    "name": "flatten"
+  },
+  "model": {
+    "name": "lightgbm",
+    "params": {
+      "objective": "binary",
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "feature_fraction": 0.8,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 5,
+      "n_estimators": 500,
+      "random_state": 42,
+      "verbose": -1
+    }
+  },
+  "training": {
+    "test_size": 0.2,
+    "validation_size": 0.1,
+    "random_state": 42,
+    "stratify": true,
+    "use_validation_for_fit": true,
+    "early_stopping_rounds": 50,
+    "early_stopping_verbose": false
+  },
+  "evaluation": {
+    "metrics": [
+      "accuracy",
+      "f1",
+      "roc_auc"
+    ],
+    "average": "binary",
+    "classification_report": true,
+    "report_digits": 4
+  },
+  "output": {
+    "model_path": "../models/latest_experiment.joblib"
+  }
+}

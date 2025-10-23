@@ -25,10 +25,11 @@ import os
 import re
 import json
 from tqdm import tqdm
-from typing import Any
+from typing import Any, Optional
 from functools import partial
 from copy import deepcopy
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import torch
@@ -455,7 +456,7 @@ class Analyzer:
         titles = [exp_name + '_' + distance_function_name for exp_name in exp_position_functions.keys() for distance_function_name in distance_functions.keys()]
         self.plot_distance(statistic, titles, save_path)
     
-    def pre_extract(self, exp_position_functions: dict[str, Any], save_path: str):
+    def pre_extract(self, exp_position_functions: dict[str, Any], save_path: str, max_workers: Optional[int] = None):
         self.read_attn()
         self.read_csc()
         src_tgt_tokens = [
@@ -468,34 +469,66 @@ class Analyzer:
                 for src_tokens, tgt_tokens in src_tgt_tokens
             ] for exp_position_function in exp_position_functions.values()
         ]
-    
+        
         exp_names = list(exp_position_functions.keys())
-        exp_attn_matrix = {
-            exp_name : []
-            for exp_name in exp_names
+        exp_attn_matrix: dict[str, list[tuple[int, int, np.ndarray]]] = {
+            exp_name: [] for exp_name in exp_names
         }
-        for filename in tqdm(self.attn_files, desc="Pre Extract attention"):
-            attn_metadata = np.load(os.path.join(self.attn_dir, filename))
-            start_id = attn_metadata['start_id']
-            end_id = attn_metadata['end_id']
-            
-            for idx in range(start_id, end_id):
-                logger.debug(f"Processing {idx}")
-                attn_matrix = attn_metadata['attentions'][:, idx - start_id]
-                for eid, e_pos_list in enumerate(exp_positions):
-                    for qid, kids in e_pos_list[idx]:
-                        if qid == None:
-                            continue
-                        if qid == 152:
-                            qid += 1
-                            qid -= 1
-                        exp_attn_matrix[exp_names[eid]].append(attn_matrix[:, :, qid, kids])
+
+        if max_workers is None:
+            cpu_cnt = os.cpu_count() or 1
+            max_workers = min(cpu_cnt, len(self.attn_files)) or 1
+        else:
+            max_workers = max(1, min(max_workers, len(self.attn_files)))
+
+        def process_file(filename: str) -> dict[str, list[tuple[int, int, np.ndarray]]]:
+            file_path = os.path.join(self.attn_dir, filename)
+            local_results: dict[str, list[tuple[int, int, np.ndarray]]] = {
+                exp_name: [] for exp_name in exp_names
+            }
+            with np.load(file_path) as attn_metadata:
+                start_id = int(attn_metadata['start_id'])
+                end_id = int(attn_metadata['end_id'])
+                attentions = attn_metadata['attentions']
+                for idx in range(start_id, end_id):
+                    attn_matrix = attentions[:, idx - start_id]
+                    for eid, e_pos_list in enumerate(exp_positions):
+                        for pos_idx, (qid, kids) in enumerate(e_pos_list[idx]):
+                            if qid is None:
+                                continue
+                            local_results[exp_names[eid]].append(
+                                (idx, pos_idx, attn_matrix[:, :, qid, kids])
+                            )
+            return local_results
+
+        if max_workers == 1:
+            iterable = self.attn_files
+            pbar = tqdm(iterable, desc="Pre Extract attention")
+            for filename in pbar:
+                file_results = process_file(filename)
+                for exp_name, values in file_results.items():
+                    exp_attn_matrix[exp_name].extend(values)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(process_file, filename): filename
+                    for filename in self.attn_files
+                }
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Pre Extract attention"):
+                    file_results = future.result()
+                    for exp_name, values in file_results.items():
+                        exp_attn_matrix[exp_name].extend(values)
         
         # save_path不存在则创建目录
         save_path = Path(save_path)
         save_path.mkdir(parents=True, exist_ok=True)
         for exp_name in exp_position_functions.keys():
-            np.save(os.path.join(save_path, f"{exp_name}.npy"), np.stack(exp_attn_matrix[exp_name]))
+            ordered = sorted(exp_attn_matrix[exp_name], key=lambda item: (item[0], item[1]))
+            tensors = [item[2] for item in ordered]
+            if tensors:
+                np.save(os.path.join(save_path, f"{exp_name}.npy"), np.stack(tensors))
+            else:
+                np.save(os.path.join(save_path, f"{exp_name}.npy"), np.empty((0,)))
 
 def find_first_diff(src_tokens, tgt_tokens) -> list[tuple[Any, list[Any]]]:
     """
@@ -613,7 +646,7 @@ def config_distance():
 def config_pre_extract():
     # 抽取某些位置的attention，避免每次处理数据时加载大批量数据
     init_config = {
-        "attn_dir": "/home/yangchunhao/csc/exp/attn_target",
+        "attn_dir": "/home/yangchunhao/csc/exp/attn/cscd-ns_train_vl_step/src_tgt",
         "csc_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
         "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
         "max_number": 5000,
@@ -624,8 +657,25 @@ def config_pre_extract():
     }
     extract_config = {
         "exp_position_functions" : exp_position_functions,
-        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train"
+        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train",
+        "max_workers": 8,
     }
+
+    # init_config = {
+    #     "attn_dir": "/home/yangchunhao/csc/exp/attn/cscd-ns_test_vl_step/src_tgt",
+    #     "csc_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "max_number": 5000,
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff,
+    # }
+    # extract_config = {
+    #     "exp_position_functions" : exp_position_functions,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test",
+    #     "max_workers": 8,
+    # }
     return init_config, extract_config
 
 def analyze():

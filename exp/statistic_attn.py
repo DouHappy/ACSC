@@ -1,4 +1,3 @@
-from optparse import Option
 import os
 import json
 from tqdm import tqdm
@@ -6,6 +5,9 @@ from typing import Any, Optional
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModel
+from pathlib import Path
+
+from exp.analyzer import get_normal_token_coresponding, find_first_diff
 
 tokenizer:Optional[AutoTokenizer] = None
 model:Optional[AutoModel] = None
@@ -27,9 +29,9 @@ def load_input(message_path, start_id=None, max_len=None):
     with open(message_path, "r") as f:
         datas = json.load(f)
     
-    if start_id:
+    if start_id is not None:
         datas['metadata']['result'] = datas['metadata']['result'][start_id:]
-    if max_len:
+    if max_len is not None:
         datas['metadata']['result'] = datas['metadata']['result'][:max_len]
     return datas
 
@@ -98,6 +100,13 @@ def get_edit_operations(src_tokens, tgt_tokens):
     # 由于回溯是从后往前，所以反转操作序列
     operations.reverse()
     return operations
+
+
+def _str2token_list(text: str) -> list[str]:
+    if tokenizer is None:
+        raise RuntimeError("Tokenizer is not loaded. Call load_model first.")
+    token_ids = tokenizer.encode(text)
+    return [tokenizer.decode([token_id]) for token_id in token_ids]
 
 def statistic_attn(datas, save_path, batchsize=16, process_start_id=0):
     # 获取message
@@ -173,7 +182,6 @@ def statistic_attn(datas, save_path, batchsize=16, process_start_id=0):
     
     # 保存配置信息
     config_path = os.path.join(save_path, 'config.json')
-    import json
     config = {
         'instruct_token_len': instruct_token_len,
         'total_samples': len(messages),
@@ -190,6 +198,114 @@ def statistic_attn(datas, save_path, batchsize=16, process_start_id=0):
     print(f"✅ 总共处理了 {len(messages)} 个样本")
     
     return config
+
+
+def realtime_pre_extract(
+    datas: dict[str, Any],
+    exp_position_functions: dict[str, Any],
+    save_path: str,
+    batchsize: int = 16,
+    process_start_id: int = 0,
+) -> dict[str, Any]:
+    """
+    实时推理attention并提取特征，避免中间磁盘I/O。
+    """
+    global tokenizer, model
+    if tokenizer is None or model is None:
+        raise RuntimeError("Tokenizer or model is not loaded. Call load_model first.")
+    model.eval()
+
+    messages: list[Any] = get_message(datas)
+    sources: list[str] = [d['source'] for d in datas['metadata']['result']]
+    targets: list[str] = [d['target'] for d in datas['metadata']['result']]
+
+    input_str0: str = tokenizer.apply_chat_template(messages[0], tokenize=False)
+    instruct: str = input_str0[:input_str0.find(sources[0])]
+    instruct_token_len: int = len(tokenizer.encode(instruct))
+    print(f"instruct_token_len = {instruct_token_len}")
+
+    src_tgt_tokens = [
+        (_str2token_list(src), _str2token_list(tgt))
+        for src, tgt in zip(sources, targets)
+    ]
+    exp_positions = [
+        [
+            exp_position_function(src_tokens, tgt_tokens)
+            for src_tokens, tgt_tokens in src_tgt_tokens
+        ]
+        for exp_position_function in exp_position_functions.values()
+    ]
+    exp_names = list(exp_position_functions.keys())
+    exp_attn_matrix: dict[str, list[tuple[int, int, np.ndarray]]] = {
+        exp_name: [] for exp_name in exp_names
+    }
+
+    total_samples = len(messages)
+    num_layers = 0
+    num_heads = 0
+    for start_id in tqdm(range(process_start_id, total_samples, batchsize), desc="实时提取特征"):
+        end_id: int = min(start_id + batchsize, total_samples)
+        batch_messages = messages[start_id:end_id]
+        input_ids = tokenizer.apply_chat_template(
+            batch_messages,
+            padding=True,
+            return_tensors="pt"
+        ).to('cuda')
+
+        with torch.no_grad():
+            outputs = model(input_ids=input_ids, output_attentions=True)
+
+        attentions = outputs.attentions
+        if not num_layers:
+            num_layers = len(attentions)
+            num_heads = attentions[0].shape[1] if attentions else 0
+        cropped_layers = []
+        for layer_attn in attentions:
+            cropped = layer_attn[:, :, instruct_token_len:, instruct_token_len:]
+            cropped_layers.append(cropped.to(torch.float32).cpu())
+        batch_attentions = torch.stack(cropped_layers, dim=0).numpy()
+
+        for batch_offset, sample_idx in enumerate(range(start_id, end_id)):
+            attn_matrix = batch_attentions[:, batch_offset]
+            for eid, e_pos_list in enumerate(exp_positions):
+                for pos_idx, (qid, kids) in enumerate(e_pos_list[sample_idx]):
+                    if qid is None:
+                        continue
+                    exp_attn_matrix[exp_names[eid]].append(
+                        (sample_idx, pos_idx, attn_matrix[:, :, qid, kids])
+                    )
+
+        del batch_attentions
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    save_dir = Path(save_path)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    meta_info = {
+        "instruct_token_len": instruct_token_len,
+        "total_samples": total_samples,
+        "num_layers": num_layers,
+        "num_heads": num_heads,
+        "batchsize": batchsize,
+        "save_path": str(save_dir)
+    }
+
+    for exp_name in exp_names:
+        ordered = sorted(exp_attn_matrix[exp_name], key=lambda item: (item[0], item[1]))
+        tensors = [item[2] for item in ordered]
+        target_file = save_dir / f"{exp_name}.npy"
+        if tensors:
+            np.save(target_file, np.stack(tensors))
+        else:
+            np.save(target_file, np.empty((0,)))
+        print(f"Saved features for {exp_name} to {target_file}")
+
+    meta_path = save_dir / "realtime_extract_config.json"
+    with meta_path.open('w', encoding='utf-8') as f:
+        json.dump(meta_info, f, indent=2, ensure_ascii=False)
+    print(f"✅ 实时提取配置保存到: {meta_path}")
+
+    return meta_info
 
 # 可选：添加数据加载函数
 def load_attention_data(save_path, batch_id=None):
@@ -230,8 +346,34 @@ def load_attention_data(save_path, batch_id=None):
         'config': config
     }
 
+
+def config_realtime_pre_extract():
+    init_config = {
+        "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+        "device_ids": "6",
+        "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
+        "max_len": 5000,
+        "batchsize": 6,
+        "process_start_id": 0,
+        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_realtime"
+    }
+    exp_position_functions = {
+        "normal_token": get_normal_token_coresponding,
+        "first_diff_token": find_first_diff,
+    }
+    return init_config, exp_position_functions
+
+
 if __name__ == "__main__":
     load_model(model_path = "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct", device_ids = "6")
     datas = load_input(message_path= "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json", max_len=5000)
     
-    statistic_attn(datas, save_path = "/home/yangchunhao/csc/exp/attn/cscd-ns_test_vl_step/src_tgt", batchsize=6)
+    # statistic_attn(datas, save_path = "/home/yangchunhao/csc/exp/attn/cscd-ns_test_vl_step/src_tgt", batchsize=6)
+    init_config, exp_position_functions = config_realtime_pre_extract()
+    realtime_pre_extract(
+        datas,
+        exp_position_functions,
+        save_path=init_config['save_path'],
+        batchsize=init_config['batchsize'],
+        process_start_id=init_config['process_start_id'],
+    )
