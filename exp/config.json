@@ -1,8 +1,0 @@
-{
-  "instruct_token_len": 103,
-  "total_samples": 1,
-  "num_layers": 28,
-  "num_heads": 28,
-  "batchsize": 16,
-  "save_path": "/home/yangchunhao/csc/exp/"
-}

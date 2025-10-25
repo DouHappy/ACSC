@@ -534,6 +534,7 @@ def find_first_diff(src_tokens, tgt_tokens) -> list[tuple[Any, list[Any]]]:
     """
     找到第一个不同的token位置p，我们要获取生成p时向原字符的attention score。
     """
+    # 添加一个pad字符用来用来处理最后一个字缺失的问题
     src_tokens_pad = deepcopy(src_tokens) + ["<im_end>"]
     tgt_tokens_pad = deepcopy(tgt_tokens) + ["<im_end>"]
     src_len = len(src_tokens)
@@ -548,6 +549,7 @@ def get_normal_token(src_tokens, tgt_tokens) -> list[tuple[str, list[str]]]:
     """
     获取第一个不同token之前的token
     """
+    # 添加一个pad字符用来用来处理最后一个字缺失的问题
     exp_positions = []
     src_tokens_pad = deepcopy(src_tokens) + ["<im_end>"]
     tgt_tokens_pad = deepcopy(tgt_tokens) + ["<im_end>"]
@@ -566,6 +568,7 @@ def get_normal_token_coresponding(src_tokens, tgt_tokens) -> list[tuple[str, lis
     """
     获取生成target时和sorce相同Token的attention score
     """
+    # 添加一个pad字符用来用来处理最后一个字缺失的问题
     exp_positions = []
     src_tokens_pad = deepcopy(src_tokens) + ["<im_end>"]
     tgt_tokens_pad = deepcopy(tgt_tokens) + ["<im_end>"]
@@ -580,6 +583,43 @@ def get_normal_token_coresponding(src_tokens, tgt_tokens) -> list[tuple[str, lis
     if exp_positions == []:
         return [(None, [None])]
     return exp_positions
+
+def first_diff_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[Any, list[Any]]]:
+    """
+    深层时token向p-2的位置
+    找到第一个不同的token位置p，我们要获取生成p时向原字符的attention score。
+    """
+    # 添加一个pad字符用来用来处理最后一个字缺失的问题
+    src_tokens_pad = deepcopy(src_tokens) + ["<im_end>"]
+    tgt_tokens_pad = deepcopy(tgt_tokens) + ["<im_end>"]
+    src_len = len(src_tokens)
+    for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
+        if src_tokens_pad[i] != tgt_tokens_pad[i]:
+            # p->p-k 所以p-1 -> p-k-1
+            return [(i-1 + src_len+5, [i-k-1])]
+
+    return [(None, [None])]
+
+def normal_token_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[str, list[str]]]:
+    """
+    获取第一个不同token之前的token，向p-2位置
+    """
+    # 添加一个pad字符用来用来处理最后一个字缺失的问题
+    exp_positions = []
+    src_tokens_pad = deepcopy(src_tokens) + ["<im_end>"]
+    tgt_tokens_pad = deepcopy(tgt_tokens) + ["<im_end>"]
+    src_len = len(src_tokens)
+    for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
+        if src_tokens_pad[i] == tgt_tokens_pad[i]:
+            # p->p-k 所以p-1 -> p-k-1
+            exp_positions.append((i + src_len + 5, [i-k-1]))
+        else:
+            break
+    
+    if exp_positions == []:
+        return [(None, [None])]
+    return exp_positions
+
 
 def config_analyze():
     init_config = {

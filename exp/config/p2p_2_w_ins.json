@@ -3,21 +3,21 @@
     "splits": {
       "train": [
         {
-          "path": "../p2p/cscd-ns/train_add_instruction/normal_token.npy",
+          "path": "../p2p/cscd-ns/train_add_instruction/normal_p2minus2.npy",
           "label": 0
         },
         {
-          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_token.npy",
+          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_p2minus2.npy",
           "label": 1
         }
       ],
       "test": [
         {
-          "path": "../p2p/cscd-ns/test_add_instruction/normal_token.npy",
+          "path": "../p2p/cscd-ns/test_add_instruction/normal_p2minus2.npy",
           "label": 0
         },
         {
-          "path": "../p2p/cscd-ns/test_add_instruction/first_diff_token.npy",
+          "path": "../p2p/cscd-ns/test_add_instruction/first_diff_p2minus2.npy",
           "label": 1
         }
       ]
@@ -60,6 +60,6 @@
     "report_digits": 4
   },
   "output": {
-    "model_path": "../models/p2p_w_ins.joblib"
+    "model_path": "../models/latest_experiment.joblib"
   }
 }

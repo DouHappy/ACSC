@@ -84,10 +84,35 @@ def flatten_extractor(vectors: np.ndarray, **_: Dict) -> np.ndarray:
         return array.reshape(-1, 1)
     return array.reshape(array.shape[0], -1)
 
+def get_instruction(vectors: np.ndarray, **_: Dict) -> np.ndarray:
+    """默认最后一个维度的第一个元素是 instruction，提取出来作为特征"""
+    array = np.asarray(vectors)
+
+    # 提取最后一个维度的第一个元素
+    instruction_features = array[..., 0]
+
+    # 如果输入是二维以上，保持其他维度不变
+    if instruction_features.ndim == 1:
+        return instruction_features.reshape(-1, 1)
+    return instruction_features.reshape(instruction_features.shape[0], -1)
+
+def ignore_instruction(vectors: np.ndarray, **_: Dict) -> np.ndarray:
+    """忽略最后一个维度的第一个元素作为特征"""
+    array = np.asarray(vectors)
+
+    # 忽略最后一个维度的第一个元素
+    features = array[..., 1:]
+
+    # 如果输入是二维以上，保持其他维度不变
+    if features.ndim == 1:
+        return features.reshape(-1, 1)
+    return features.reshape(features.shape[0], -1)
 
 EXTRACTOR_REGISTRY: Dict[str, Callable[..., np.ndarray]] = {
     "identity": identity_extractor,
     "flatten": flatten_extractor,
+    "get_instruction": get_instruction,
+    "ignore_instruction": ignore_instruction,
 }
 
 
@@ -286,11 +311,13 @@ def train_model(
     if splits.X_val is not None and training_cfg.get("use_validation_for_fit", True):
         # Provide evaluation set for algorithms that support it (e.g. LightGBM).
         fit_params.setdefault("eval_set", [(splits.X_val, splits.y_val)])
-        fit_params.setdefault("eval_metric", "binary_logloss")
+    else:
+        fit_params.setdefault("eval_set", [(splits.X_test, splits.y_test)])
 
     if algorithm_name.lower() == "lightgbm":
         early_stopping_rounds = training_cfg.get("early_stopping_rounds")
         if early_stopping_rounds is not None:
+            fit_params.setdefault("eval_metric", "binary_logloss")
             callbacks = list(fit_params.get("callbacks", []))
             callbacks.append(
                 lgb.early_stopping(
@@ -330,8 +357,8 @@ def evaluate_model(
     estimator,
     splits: DatasetSplits,
     evaluation_cfg: Dict,
-) -> Dict[str, object]:
-    """Evaluate the estimator on the test split."""
+) -> Dict[str, Dict[str, object]]:
+    """Evaluate the estimator on the train and test splits."""
 
     metrics: Sequence[str] = evaluation_cfg.get("metrics", ["accuracy", "f1"])
     average = evaluation_cfg.get("average", "binary")
@@ -339,37 +366,43 @@ def evaluate_model(
 
     metric_registry = _build_metrics(average)
 
-    y_pred = estimator.predict(splits.X_test)
-    results: Dict[str, object] = {}
+    def evaluate_split(X: np.ndarray, y: np.ndarray) -> Dict[str, object]:
+        split_results: Dict[str, object] = {}
+        y_pred = estimator.predict(X)
 
-    for metric_name in metrics:
-        metric_key = metric_name.lower()
-        if metric_key not in metric_registry:
-            available = ", ".join(sorted(metric_registry))
-            raise ValueError(
-                f"Unknown metric '{metric_name}'. Available metrics: {available}"
+        for metric_name in metrics:
+            metric_key = metric_name.lower()
+            if metric_key not in metric_registry:
+                available = ", ".join(sorted(metric_registry))
+                raise ValueError(
+                    f"Unknown metric '{metric_name}'. Available metrics: {available}"
+                )
+
+            if metric_key in PROBABILITY_METRICS:
+                if not hasattr(estimator, "predict_proba"):
+                    raise AttributeError(
+                        f"Metric '{metric_name}' requires 'predict_proba' support"
+                    )
+                y_scores = estimator.predict_proba(X)
+                if y_scores.ndim == 2 and y_scores.shape[1] > 1:
+                    y_scores = y_scores[:, 1]
+                split_results[metric_key] = metric_registry[metric_key](y, y_scores)
+            else:
+                split_results[metric_key] = metric_registry[metric_key](y, y_pred)
+
+        if report:
+            split_results["classification_report"] = classification_report(
+                y,
+                y_pred,
+                digits=evaluation_cfg.get("report_digits", 4),
             )
 
-        if metric_key in PROBABILITY_METRICS:
-            if not hasattr(estimator, "predict_proba"):
-                raise AttributeError(
-                    f"Metric '{metric_name}' requires 'predict_proba' support"
-                )
-            y_scores = estimator.predict_proba(splits.X_test)
-            if y_scores.ndim == 2 and y_scores.shape[1] > 1:
-                y_scores = y_scores[:, 1]
-            results[metric_key] = metric_registry[metric_key](splits.y_test, y_scores)
-        else:
-            results[metric_key] = metric_registry[metric_key](splits.y_test, y_pred)
+        return split_results
 
-    if report:
-        results["classification_report"] = classification_report(
-            splits.y_test,
-            y_pred,
-            digits=evaluation_cfg.get("report_digits", 4),
-        )
-
-    return results
+    return {
+        "test": evaluate_split(splits.X_test, splits.y_test),
+        "train": evaluate_split(splits.X_train, splits.y_train),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -459,13 +492,25 @@ def run_experiment(config_path: Path) -> Dict[str, object]:
     }
 
 
-def format_results(results: Dict[str, object]) -> str:
+def format_results(results: Dict[str, Dict[str, object]]) -> str:
     lines = []
-    for key, value in results.items():
-        if key == "classification_report":
-            lines.append("Classification report:\n" + str(value))
-        else:
-            lines.append(f"{key}: {value:.4f}")
+
+    for split in ("test", "train"):
+        if split not in results:
+            continue
+
+        lines.append(f"{split.capitalize()} metrics:")
+        split_results = results[split]
+        for key, value in split_results.items():
+            if key == "classification_report":
+                lines.append("Classification report:\n" + str(value))
+            else:
+                lines.append(f"{key}: {value:.4f}")
+        lines.append("")
+
+    if lines and lines[-1] == "":
+        lines.pop()
+
     return "\n".join(lines)
 
 
@@ -487,5 +532,11 @@ def main(args: Optional[Sequence[str]] = None) -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
-    main()
+    '''
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_2.json
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_2_w_ins.json
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3.json
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3_w_ins.json
 
+    '''
+    main()

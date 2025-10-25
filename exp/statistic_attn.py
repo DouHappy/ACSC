@@ -1,3 +1,4 @@
+from functools import partial
 import os
 import json
 from tqdm import tqdm
@@ -7,7 +8,7 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 from pathlib import Path
 
-from exp.analyzer import get_normal_token_coresponding, find_first_diff
+from exp.analyzer import get_normal_token_coresponding, find_first_diff, first_diff_p2minus_k, normal_token_p2minus_k
 
 tokenizer:Optional[AutoTokenizer] = None
 model:Optional[AutoModel] = None
@@ -23,7 +24,7 @@ def load_model(model_path, device_ids = '0') -> None:
         output_attentions=True, 
         device_map='auto', 
         torch_dtype=torch.bfloat16,
-        ).to("cuda")
+        ).to('cuda')
 
 def load_input(message_path, start_id=None, max_len=None):
     with open(message_path, "r") as f:
@@ -42,7 +43,7 @@ def get_message(datas):
         message.append(
             {
                 "role": "assistant",
-                "content": d['prediction'],
+                "content": d['target'],
             }
         )
         messages.append(message)
@@ -206,6 +207,8 @@ def realtime_pre_extract(
     save_path: str,
     batchsize: int = 16,
     process_start_id: int = 0,
+    add_instruction: bool = False,
+    crop_shift: int = 0,
 ) -> dict[str, Any]:
     """
     实时推理attention并提取特征，避免中间磁盘I/O。
@@ -239,6 +242,9 @@ def realtime_pre_extract(
     exp_attn_matrix: dict[str, list[tuple[int, int, np.ndarray]]] = {
         exp_name: [] for exp_name in exp_names
     }
+    # 创建instruct的attention分布
+    for exp_name in exp_names:
+        exp_attn_matrix[f"{exp_name}_ins"] = []
 
     total_samples = len(messages)
     num_layers = 0
@@ -260,20 +266,40 @@ def realtime_pre_extract(
             num_layers = len(attentions)
             num_heads = attentions[0].shape[1] if attentions else 0
         cropped_layers = []
+        instruct_attn = []
         for layer_attn in attentions:
-            cropped = layer_attn[:, :, instruct_token_len:, instruct_token_len:]
+            # 为了计算更快 临时裁剪一下
+            cropped = layer_attn[:, :, instruct_token_len - crop_shift:, instruct_token_len - crop_shift:]
             cropped_layers.append(cropped.to(torch.float32).cpu())
+            if add_instruction:
+                instruct_attn.append(
+                    layer_attn[:, :, instruct_token_len - crop_shift:, :instruct_token_len].sum(dim=-1, keepdims=True).to(torch.float32).cpu()
+                )
         batch_attentions = torch.stack(cropped_layers, dim=0).numpy()
-
+        if add_instruction:
+            instruct_attn = torch.stack(instruct_attn, dim=0).numpy()
+        # batch_attentions = torch.stack([a.to(torch.float32).cpu() for a in attentions]).numpy()
         for batch_offset, sample_idx in enumerate(range(start_id, end_id)):
+            # print(f"processing sample {sample_idx}")
+            # print(f"message: {messages[sample_idx]}")
             attn_matrix = batch_attentions[:, batch_offset]
             for eid, e_pos_list in enumerate(exp_positions):
                 for pos_idx, (qid, kids) in enumerate(e_pos_list[sample_idx]):
                     if qid is None:
                         continue
+                    # print(f"qid and kids: {qid}, {kids}")
+                    kid_plus_instruct = [k+crop_shift for k in kids]
+                    qid_attn_matrix = attn_matrix[:, :, qid+crop_shift, kid_plus_instruct]
+                    if add_instruction == True:
+                        qid_attn_matrix = np.concatenate(
+                            [instruct_attn[:, batch_offset, :, qid+crop_shift, :], qid_attn_matrix],
+                            axis=-1
+                        )
+
                     exp_attn_matrix[exp_names[eid]].append(
-                        (sample_idx, pos_idx, attn_matrix[:, :, qid, kids])
+                        (sample_idx, pos_idx, qid_attn_matrix)
                     )
+                    
 
         del batch_attentions
         if torch.cuda.is_available():
@@ -348,32 +374,135 @@ def load_attention_data(save_path, batch_id=None):
 
 
 def config_realtime_pre_extract():
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-test_step
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "6",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
+    #     "max_len": 10,
+    #     "batchsize": 6,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_debug"
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff
+    # }
+
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "5",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
+    #     "max_len": None,
+    #     "batchsize": 4,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_realtime"
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff,
+    # }
+
+    # # Qwen2.5-VL-7B-Instruct_cscd-ns-test_step with instruction and more fetures
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "6",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
+    #     "max_len": None,
+    #     "batchsize": 8,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_add_instruction",
+    #     "add_instruction": True,
+    #     "crop_shift": 5,
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff,
+    #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
+    #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
+    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
+    # }
+
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step with instruction and more fetures
     init_config = {
         "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
         "device_ids": "6",
-        "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
-        "max_len": 5000,
-        "batchsize": 6,
+        "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step/checkpoints/csc.json",
+        "max_len": None,
+        "batchsize": 8,
         "process_start_id": 0,
-        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_realtime"
+        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/dev_add_instruction",
+        "add_instruction": True,
+        "crop_shift": 5,
     }
     exp_position_functions = {
         "normal_token": get_normal_token_coresponding,
         "first_diff_token": find_first_diff,
+        "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
+        "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
+        "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+        "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
     }
+
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-train_step
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "6",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
+    #     "max_len": None,
+    #     "batchsize": 8,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_add_instruction",
+    #     "add_instruction": True,
+    #     "crop_shift": 5,
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff,
+    #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
+    #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
+    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
+    # }
+
+    # debug
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "6",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
+    #     "max_len": 10,
+    #     "batchsize": 6,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_add_instruction",
+    #     "add_instruction": True,
+    #     "crop_shift": 5,
+    # }
+    # exp_position_functions = {
+    #     "normal_token": get_normal_token_coresponding,
+    #     "first_diff_token": find_first_diff,
+    #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
+    #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
+    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
+    # }
     return init_config, exp_position_functions
 
 
 if __name__ == "__main__":
-    load_model(model_path = "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct", device_ids = "6")
-    datas = load_input(message_path= "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json", max_len=5000)
+    # python -m exp.statistic_attn
+    init_config, exp_position_functions = config_realtime_pre_extract()
+    load_model(model_path = init_config['model_path'], device_ids = init_config['device_ids'])
+    datas = load_input(init_config['message_path'], max_len=init_config['max_len'])
     
     # statistic_attn(datas, save_path = "/home/yangchunhao/csc/exp/attn/cscd-ns_test_vl_step/src_tgt", batchsize=6)
-    init_config, exp_position_functions = config_realtime_pre_extract()
+    
     realtime_pre_extract(
         datas,
         exp_position_functions,
         save_path=init_config['save_path'],
         batchsize=init_config['batchsize'],
         process_start_id=init_config['process_start_id'],
+        add_instruction=init_config['add_instruction'],
+        crop_shift=init_config['crop_shift'],
     )
