@@ -596,7 +596,7 @@ def first_diff_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[Any, list[An
     for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
         if src_tokens_pad[i] != tgt_tokens_pad[i]:
             # p->p-k 所以p-1 -> p-k-1
-            return [(i-1 + src_len+5, [i-k-1])]
+            return [(i-1 + src_len+5, [i-k])]
 
     return [(None, [None])]
 
@@ -612,7 +612,7 @@ def normal_token_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[str, list[
     for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
         if src_tokens_pad[i] == tgt_tokens_pad[i]:
             # p->p-k 所以p-1 -> p-k-1
-            exp_positions.append((i + src_len + 5, [i-k-1]))
+            exp_positions.append((i-1 + src_len + 5, [i-k]))
         else:
             break
     

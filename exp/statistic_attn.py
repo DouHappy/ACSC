@@ -403,75 +403,12 @@ def config_realtime_pre_extract():
     #     "first_diff_token": find_first_diff,
     # }
 
-    # # Qwen2.5-VL-7B-Instruct_cscd-ns-test_step with instruction and more fetures
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-test_step with instruction and more fetures
     # init_config = {
     #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
     #     "device_ids": "6",
     #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
     #     "max_len": None,
-    #     "batchsize": 8,
-    #     "process_start_id": 0,
-    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_add_instruction",
-    #     "add_instruction": True,
-    #     "crop_shift": 5,
-    # }
-    # exp_position_functions = {
-    #     "normal_token": get_normal_token_coresponding,
-    #     "first_diff_token": find_first_diff,
-    #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
-    #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
-    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
-    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
-    # }
-
-    # Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step with instruction and more fetures
-    init_config = {
-        "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
-        "device_ids": "6",
-        "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step/checkpoints/csc.json",
-        "max_len": None,
-        "batchsize": 8,
-        "process_start_id": 0,
-        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/dev_add_instruction",
-        "add_instruction": True,
-        "crop_shift": 5,
-    }
-    exp_position_functions = {
-        "normal_token": get_normal_token_coresponding,
-        "first_diff_token": find_first_diff,
-        "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
-        "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
-        "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
-        "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
-    }
-
-    # Qwen2.5-VL-7B-Instruct_cscd-ns-train_step
-    # init_config = {
-    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
-    #     "device_ids": "6",
-    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
-    #     "max_len": None,
-    #     "batchsize": 8,
-    #     "process_start_id": 0,
-    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_add_instruction",
-    #     "add_instruction": True,
-    #     "crop_shift": 5,
-    # }
-    # exp_position_functions = {
-    #     "normal_token": get_normal_token_coresponding,
-    #     "first_diff_token": find_first_diff,
-    #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
-    #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
-    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
-    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
-    # }
-
-    # debug
-    # init_config = {
-    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
-    #     "device_ids": "6",
-    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
-    #     "max_len": 10,
     #     "batchsize": 6,
     #     "process_start_id": 0,
     #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_add_instruction",
@@ -479,17 +416,81 @@ def config_realtime_pre_extract():
     #     "crop_shift": 5,
     # }
     # exp_position_functions = {
-    #     "normal_token": get_normal_token_coresponding,
-    #     "first_diff_token": find_first_diff,
+    #     "first_diff_token": partial(first_diff_p2minus_k, k=0),
+    #     "normal_token": partial(normal_token_p2minus_k, k=0),
+    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
+    #     "first_diff_p2minus4": partial(first_diff_p2minus_k, k=4),
+    #     "normal_p2minus4": partial(normal_token_p2minus_k, k=4),
+    # }
+
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step with instruction and more fetures
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "4",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-dev_step/checkpoints/csc.json",
+    #     "max_len": None,
+    #     "batchsize": 6,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/dev_add_instruction",
+    #     "add_instruction": True,
+    #     "crop_shift": 5,
+    # }
+    # exp_position_functions = {
+    #     "first_diff_token": partial(first_diff_p2minus_k, k=0),
+    #     "normal_token": partial(normal_token_p2minus_k, k=0),
     #     "first_diff_p2minus2": partial(first_diff_p2minus_k, k=2),
     #     "normal_p2minus2": partial(normal_token_p2minus_k, k=2),
     #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
     #     "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
     # }
+
+    # Qwen2.5-VL-7B-Instruct_cscd-ns-train_step
+    init_config = {
+        "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+        "device_ids": "3",
+        "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-train_step/checkpoints/csc.json",
+        "max_len": None,
+        "batchsize": 6,
+        "process_start_id": 0,
+        "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/train_add_instruction",
+        "add_instruction": True,
+        "crop_shift": 5,
+    }
+    exp_position_functions = {
+        "first_diff_token": partial(first_diff_p2minus_k, k=0),
+        "normal_token": partial(normal_token_p2minus_k, k=0),
+        "first_diff_p2minus3": partial(first_diff_p2minus_k, k=3),
+        "normal_p2minus3": partial(normal_token_p2minus_k, k=3),
+        "first_diff_p2minus4": partial(first_diff_p2minus_k, k=4),
+        "normal_p2minus4": partial(normal_token_p2minus_k, k=4),
+    }
+
+    # debug
+    # init_config = {
+    #     "model_path": "/data/images/llms/Qwen/Qwen2.5-VL-7B-Instruct",
+    #     "device_ids": "6",
+    #     "message_path": "/home/yangchunhao/csc/results/Qwen2.5-VL-7B-Instruct_cscd-ns-test_step/checkpoints/csc.json",
+    #     "max_len": 10,
+    #     "batchsize": 8,
+    #     "process_start_id": 0,
+    #     "save_path": "/home/yangchunhao/csc/exp/p2p/cscd-ns/test_debug",
+    #     "add_instruction": True,
+    #     "crop_shift": 5,
+    # }
+    # exp_position_functions = {
+    #     "first_diff_token": partial(first_diff_p2minus_k, k=0),
+    #     "normal_token": partial(normal_token_p2minus_k, k=0),
+    #     "first_diff_p2minus3": partial(first_diff_p2minus_k, k=2),
+    #     "normal_p2minus3": partial(normal_token_p2minus_k, k=4),
+    #     "first_diff_p2minus4": partial(first_diff_p2minus_k, k=4),
+    #     "normal_p2minus4": partial(normal_token_p2minus_k, k=4),
+    # }
     return init_config, exp_position_functions
 
 
 if __name__ == "__main__":
+    # 谨慎调整batchsize，批处理数据不同会在某些位置上明显影响效果。
     # python -m exp.statistic_attn
     init_config, exp_position_functions = config_realtime_pre_extract()
     load_model(model_path = init_config['model_path'], device_ids = init_config['device_ids'])

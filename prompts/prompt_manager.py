@@ -156,6 +156,41 @@ class PromptManager:
             logger.error(f"格式化prompt失败: {e}")
             raise ValueError(f"格式化prompt失败: {e}")
 
+    def get_instruct_len(self, name: str) -> int:
+        """
+        计算Prompt Template 中 Instruction 的token长度
+        
+        Args:
+            name: prompt模板名称
+            tokenizer: 用于计算token长度的分词器
+            
+        Returns:
+            token长度
+        """
+        test_source = "<test>This is a test source.</test>"
+        prompt_message = self.format_prompt(name, source=test_source)
+        prompt = self.tokenizer.apply_chat_template(prompt_message, tokenize=False)
+        insturct = prompt[:prompt.find(test_source)]
+        instruct_token_str = [self.tokenizer.decode(t) for t in self.tokenizer.encode(insturct)]
+        return len(instruct_token_str)
+
+    def get_token_str_list(self, text: str) -> List[str]:
+        """
+        将文本转换为token字符串列表
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            token字符串列表
+        """
+        if not self.tokenizer:
+            raise ValueError("Tokenizer未初始化，无法进行分词操作。")
+        
+        token_ids = self.tokenizer.encode(text)
+        token_strs = [self.tokenizer.decode(tid) for tid in token_ids]
+        return token_strs
+
 # 使用示例
 if __name__ == "__main__":
     # 初始化PromptManager

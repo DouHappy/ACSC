@@ -533,10 +533,10 @@ def main(args: Optional[Sequence[str]] = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     '''
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_2.json
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_2_w_ins.json
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3.json
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3_w_ins.json
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3.json >> logs/ml_pipeline.log 2>&1 &
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3_w_ins.json >> logs/ml_pipeline.log 2>&1 &
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4.json >> logs/ml_pipeline.log 2>&1 &
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4_w_ins.json >> logs/ml_pipeline.log 2>&1 &
 
     '''
     main()

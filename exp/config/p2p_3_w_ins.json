@@ -60,6 +60,6 @@
     "report_digits": 4
   },
   "output": {
-    "model_path": "../models/p2p_3_w_ins.joblib"
+    "model_path": "../models/latest_experiment.joblib"
   }
 }
