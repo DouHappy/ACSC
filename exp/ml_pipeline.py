@@ -108,11 +108,23 @@ def ignore_instruction(vectors: np.ndarray, **_: Dict) -> np.ndarray:
         return features.reshape(-1, 1)
     return features.reshape(features.shape[0], -1)
 
+def get_l22h25(vectors: np.ndarray, **_: Dict) -> np.ndarray:
+    """获取Layer22Head25的特征"""
+    array = np.asarray(vectors)
+
+    l22h25_features = array[:, 18, 14, 1]
+
+    # 如果输入是二维以上，保持其他维度不变
+    if l22h25_features.ndim == 1:
+        return l22h25_features.reshape(-1, 1)
+    return l22h25_features.reshape(l22h25_features.shape[0], -1)
+
 EXTRACTOR_REGISTRY: Dict[str, Callable[..., np.ndarray]] = {
     "identity": identity_extractor,
     "flatten": flatten_extractor,
     "get_instruction": get_instruction,
     "ignore_instruction": ignore_instruction,
+    "get_l22h25": get_l22h25,
 }
 
 
@@ -297,6 +309,16 @@ def create_dataset_splits(
 # Training helpers
 # ---------------------------------------------------------------------------
 
+from sklearn.metrics import precision_recall_curve
+
+def find_best_threshold_by_f1(estimator, X_val, y_val):
+    proba = estimator.predict_proba(X_val)[:, 1]
+    precision, recall, thresholds = precision_recall_curve(y_val, proba)
+    # F1 = 2PR/(P+R)；注意 thresholds 长度= len(precision) - 1
+    f1s = 2 * precision[:-1] * recall[:-1] / (precision[:-1] + recall[:-1] + 1e-12)
+    best_idx = f1s.argmax()
+    return float(thresholds[best_idx]), float(f1s[best_idx]), float(precision[best_idx]), float(recall[best_idx])
+
 
 def train_model(
     estimator,
@@ -352,6 +374,15 @@ def _build_metrics(average: str) -> Dict[str, MetricFn]:
 
 PROBABILITY_METRICS = {"roc_auc", "log_loss"}
 
+# evaluate_model() 里，先取 y_proba
+def _predict_with_optional_threshold(estimator, X, threshold=None):
+    if threshold is None or not hasattr(estimator, "predict_proba"):
+        return estimator.predict(X)
+    proba = estimator.predict_proba(X)
+    if proba.ndim == 2:
+        proba = proba[:, 1]
+    return (proba >= threshold).astype(int)
+
 
 def evaluate_model(
     estimator,
@@ -368,7 +399,10 @@ def evaluate_model(
 
     def evaluate_split(X: np.ndarray, y: np.ndarray) -> Dict[str, object]:
         split_results: Dict[str, object] = {}
-        y_pred = estimator.predict(X)
+        # y_pred = estimator.predict(X)
+        threshold = evaluation_cfg.get("decision_threshold")  # e.g. 0.1 ~ 0.3
+        y_pred = _predict_with_optional_threshold(estimator, X, threshold)
+
 
         for metric_name in metrics:
             metric_key = metric_name.lower()
@@ -433,6 +467,9 @@ def maybe_save_model(estimator, output_cfg: Optional[Dict], base_path: Path) -> 
 
 def run_experiment(config_path: Path) -> Dict[str, object]:
     config = load_config(config_path)
+    print("\n" + "-"*30 + "\n")
+    print(f"# Experiment name: {config.get('exp_name', 'unnamed_experiment')}")
+    print("\n" + "-"*30)
     base_path = config_path.parent
 
     dataset_cfg = config.get("dataset", {})
@@ -480,6 +517,11 @@ def run_experiment(config_path: Path) -> Dict[str, object]:
     estimator = factory.create(algorithm_name, algorithm_params)
 
     estimator = train_model(estimator, algorithm_name, splits, training_cfg)
+
+    if splits.X_val is not None and hasattr(estimator, "predict_proba"):
+        thr, f1v, pv, rv = find_best_threshold_by_f1(estimator, splits.X_val, splits.y_val)
+        print(f"[VAL] best F1 threshold={thr:.4f} (F1={f1v:.4f}, P={pv:.4f}, R={rv:.4f})")
+        evaluation_cfg["decision_threshold"] = thr
 
     results = evaluate_model(estimator, splits, evaluation_cfg)
 
@@ -533,10 +575,12 @@ def main(args: Optional[Sequence[str]] = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     '''
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3.json >> logs/ml_pipeline.log 2>&1 &
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3_w_ins.json >> logs/ml_pipeline.log 2>&1 &
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4.json >> logs/ml_pipeline.log 2>&1 &
-    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4_w_ins.json >> logs/ml_pipeline.log 2>&1 &
-
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_w_ins.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_3_w_ins.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_4_w_ins.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_w_ins_l22h25.json >> logs/ml_pipeline.log 2>&1
+    python exp/ml_pipeline.py  --config /home/yangchunhao/csc/exp/config/p2p_full.json >> logs/ml_pipeline.log 2>&1
     '''
     main()

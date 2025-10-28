@@ -21,11 +21,21 @@
           "path": "../p2p/cscd-ns/test_add_instruction/first_diff_token.npy",
           "label": 1
         }
+      ],
+      "dev": [
+        {
+          "path": "../p2p/cscd-ns/train_add_instruction/normal_token.npy",
+          "label": 0
+        },
+        {
+          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_token.npy",
+          "label": 1
+        }
       ]
     }
   },
   "vectorizer": {
-    "name": "flatten"
+    "name": "ignore_instruction"
   },
   "model": {
     "name": "lightgbm",
@@ -33,6 +43,8 @@
       "objective": "binary",
       "learning_rate": 0.05,
       "num_leaves": 31,
+      "max_depth": 7,
+      "lambda_l1": 0.5,
       "feature_fraction": 0.8,
       "bagging_fraction": 0.8,
       "bagging_freq": 5,

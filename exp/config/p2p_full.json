@@ -1,24 +1,34 @@
 {
-  "exp_name": "p2p_w_ins",
+  "exp_name": "p2p_full",
   "dataset": {
     "splits": {
       "train": [
         {
-          "path": "../p2p/cscd-ns/train_add_instruction/normal_token.npy",
+          "path": "../p2p/cscd-ns/train_add_instruction/normal_full.npy",
           "label": 0
         },
         {
-          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_token.npy",
+          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_full.npy",
           "label": 1
         }
       ],
       "test": [
         {
-          "path": "../p2p/cscd-ns/test_add_instruction/normal_token.npy",
+          "path": "../p2p/cscd-ns/test_add_instruction/normal_full.npy",
           "label": 0
         },
         {
-          "path": "../p2p/cscd-ns/test_add_instruction/first_diff_token.npy",
+          "path": "../p2p/cscd-ns/test_add_instruction/first_diff_full.npy",
+          "label": 1
+        }
+      ],
+      "dev": [
+        {
+          "path": "../p2p/cscd-ns/train_add_instruction/normal_full.npy",
+          "label": 0
+        },
+        {
+          "path": "../p2p/cscd-ns/train_add_instruction/first_diff_full.npy",
           "label": 1
         }
       ]
@@ -33,6 +43,8 @@
       "objective": "binary",
       "learning_rate": 0.05,
       "num_leaves": 31,
+      "max_depth": 7,
+      "lambda_l1": 0.5,
       "feature_fraction": 0.8,
       "bagging_fraction": 0.8,
       "bagging_freq": 5,
@@ -61,6 +73,6 @@
     "report_digits": 4
   },
   "output": {
-    "model_path": "../models/p2p_w_ins.joblib"
+    "model_path": "../models/p2p_full.joblib"
   }
 }

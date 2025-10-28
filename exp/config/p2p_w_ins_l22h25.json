@@ -1,5 +1,5 @@
 {
-  "exp_name": "p2p_w_ins",
+  "exp_name": "p2p_w_ins_l22h25",
   "dataset": {
     "splits": {
       "train": [
@@ -25,7 +25,7 @@
     }
   },
   "vectorizer": {
-    "name": "flatten"
+    "name": "get_l22h25"
   },
   "model": {
     "name": "lightgbm",
