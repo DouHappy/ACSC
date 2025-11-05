@@ -1,0 +1,53 @@
+{
+  "exp_name": "p2p_t2s_mlp",
+  "dataset": {
+    "splits": {
+      "train": [
+        {"path": "../../p2p/cscd-ns/train/normal_token.npy", "label": 0},
+        {"path": "../../p2p/cscd-ns/train/first_diff_token.npy","label": 1}
+      ],
+      "test": [
+        {"path": "../../p2p/cscd-ns/test/normal_token.npy","label": 0},
+        {"path": "../../p2p/cscd-ns/test/first_diff_token.npy","label": 1}
+      ],
+      "dev": [
+        {"path": "../../p2p/cscd-ns/train/normal_token.npy","label": 0},
+        {"path": "../../p2p/cscd-ns/train/first_diff_token.npy","label": 1}
+      ]
+    }
+  },
+  "vectorizer": {
+    "name": "flatten"
+  },
+  "model": {
+    "name": "mlp",
+    "params": {
+      "hidden_dims": [256, 128],
+      "activation": "relu",
+      "dropout": 0.2,
+      "learning_rate": 0.0005,
+      "weight_decay": 0.0001,
+      "default_epochs": 30,
+      "default_batch_size": 64,
+      "patience": 5,
+      "min_delta": 0.001
+    }
+  },
+  "training": {
+    "use_validation_for_fit": true,
+    "fit_params": {
+      "epochs": 50,
+      "batch_size": 128,
+      "patience": 8,
+      "verbose": true
+    }
+  },
+  "evaluation": {
+    "metrics": ["accuracy", "f1", "roc_auc"],
+    "average": "binary",
+    "classification_report": true
+  },
+  "output": {
+    "model_path": "checkpoints/p2p_t2s_mlp.pkl"
+  }
+}
