@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Any, List, Union, Optional
 from dataclasses import dataclass, field
 
-from .backends import VLLMBackend, HuggingFaceBackend, BaseBackend, APIBackend
+from .backends import VLLMBackend, HuggingFaceBackend, BaseBackend, APIBackend, AliyunDashScopeBackend
 from utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +31,9 @@ class LLMConfig:
     device: str = "auto"
     max_model_len: int = 2048
     base_url: str = ""
+    api_key: Optional[str] = None
+    api_key_env: Optional[str] = None
+    extra_body: Optional[Dict[str, Any]] = None
         
 class LLMManager:
     """统一的LLM管理器，支持多种后端"""
@@ -60,6 +63,8 @@ class LLMManager:
             self.backend = HuggingFaceBackend(self.config)
         elif backend_name == 'api':
             self.backend = APIBackend(self.config)
+        elif backend_name in {'aliyuncs', 'dashscope'}:
+            self.backend = AliyunDashScopeBackend(self.config)
         else:
             raise ValueError(f"Unsupported backend: {backend_name}")
             

@@ -35,6 +35,7 @@ class Evaluator:
         """
         self.config = config
         self.metrics = {}
+        self.task_type = self.config.get("task_type", "csc")
         
     def load_data(self, source_path: str, target_path: str) -> Tuple[List[str], List[str]]:
         """
@@ -214,6 +215,18 @@ class Evaluator:
             评估结果字典
         """
         try:
+            if self.task_type == "review":
+                result_file = self.config.get('result_file')
+                if result_file is None:
+                    raise ValueError("审查评估需要提供result_file路径")
+                results = load_results(result_file)
+                if not results:
+                    raise ValueError("结果文件为空，无法评估")
+
+                metrics = self.calculate_review_metrics(results)
+                print(f"评估指标: {json.dumps(metrics, ensure_ascii=False, indent=2)}")
+                return metrics
+
             # 如果没有提供数据，从配置文件加载
             if sources is None or targets is None:
                 source_path = self.config.get('source_file')
@@ -254,6 +267,98 @@ class Evaluator:
         except Exception as e:
             logger.error(f"评估失败: {e}")
             raise
+
+    @staticmethod
+    def _prediction_detects_issue(prediction: Any) -> bool:
+        """判断审查结果是否识别出问题"""
+        if prediction is None:
+            return False
+
+        if isinstance(prediction, (list, dict)):
+            try:
+                prediction = json.dumps(prediction, ensure_ascii=False)
+            except Exception:
+                prediction = str(prediction)
+        else:
+            prediction = str(prediction)
+
+        text = prediction.strip()
+        if not text:
+            return False
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        # 优先判断结构化输出中是否包含分隔符
+        for line in lines:
+            if "$$" in line:
+                segments = [segment.strip() for segment in line.split("$$")]
+                if sum(bool(seg) for seg in segments) >= 2:
+                    return True
+
+        normalized = text.replace(" ", "")
+        negative_markers = [
+            "未发现错误",
+            "未发现问题",
+            "未发现异常",
+            "未发现疑义",
+            "未检出错误",
+            "无错误",
+            "无问题",
+            "没有错误",
+        ]
+        if any(marker in normalized for marker in negative_markers):
+            return False
+
+        # 兜底策略：若包含表明存在问题的关键词，认为检测到问题
+        positive_markers = ["发现", "存在", "错误", "问题", "异常"]
+        if any(marker in normalized for marker in positive_markers):
+            return True
+
+        return False
+
+    def calculate_review_metrics(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """计算审查任务的precision/recall/F1"""
+        true_positive = 0
+        false_positive = 0
+        false_negative = 0
+
+        total_samples = len(results)
+
+        for item in results:
+            gt_reason = item.get("reason")
+            has_error = bool(gt_reason and str(gt_reason).strip())
+
+            prediction = item.get("prediction", "")
+            predicted_issue = self._prediction_detects_issue(prediction)
+
+            if predicted_issue and has_error:
+                true_positive += 1
+            elif predicted_issue and not has_error:
+                false_positive += 1
+            elif not predicted_issue and has_error:
+                false_negative += 1
+
+        predicted_total = true_positive + false_positive
+        actual_total = true_positive + false_negative
+
+        precision = true_positive / predicted_total if predicted_total else 0.0
+        recall = true_positive / actual_total if actual_total else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+
+        metrics = {
+            "review_precision": round(precision * 100, 3),
+            "review_recall": round(recall * 100, 3),
+            "review_f1": round(f1 * 100, 3),
+            "review_counts": {
+                "total_samples": total_samples,
+                "actual_positive": actual_total,
+                "predicted_positive": predicted_total,
+                "true_positive": true_positive,
+                "false_positive": false_positive,
+                "false_negative": false_negative,
+            },
+        }
+
+        return metrics
 
 
 def main():

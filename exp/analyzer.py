@@ -584,7 +584,7 @@ def get_normal_token_coresponding(src_tokens, tgt_tokens) -> list[tuple[str, lis
         return [(None, [None])]
     return exp_positions
 
-def first_diff_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[Any, list[Any]]]:
+def first_diff_p2minus_k(src_tokens, tgt_tokens, k=0, from_target=True, to_target=False) -> list[tuple[Any, list[Any]]]:
     """
     深层时token向p-2的位置
     找到第一个不同的token位置p，我们要获取生成p时向原字符的attention score。
@@ -596,11 +596,16 @@ def first_diff_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[Any, list[An
     for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
         if src_tokens_pad[i] != tgt_tokens_pad[i]:
             # p->p-k 所以p-1 -> p-k-1
-            return [(i-1 + src_len+5, [i-k])]
+            qid, kid = i - 1, i - k
+            if from_target:
+                qid += src_len + 5
+            if to_target:
+                kid += src_len + 5
+            return [(qid, [kid-k])]
 
     return [(None, [None])]
 
-def normal_token_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[str, list[str]]]:
+def normal_token_p2minus_k(src_tokens, tgt_tokens, k=0, from_target=True, to_target=False) -> list[tuple[str, list[str]]]:
     """
     获取第一个不同token之前的token，向p-2位置
     """
@@ -612,7 +617,12 @@ def normal_token_p2minus_k(src_tokens, tgt_tokens, k=0) -> list[tuple[str, list[
     for i in range(min(len(src_tokens_pad), len(tgt_tokens_pad))):
         if src_tokens_pad[i] == tgt_tokens_pad[i]:
             # p->p-k 所以p-1 -> p-k-1
-            exp_positions.append((i-1 + src_len + 5, [i-k]))
+            qid, kid = i - 1, i - k
+            if from_target:
+                qid += src_len + 5
+            if to_target:
+                kid += src_len + 5
+            exp_positions.append((qid, [kid-k]))
         else:
             break
     

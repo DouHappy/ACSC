@@ -26,6 +26,7 @@ import argparse
 import json
 import warnings
 from collections.abc import Sequence as SequenceABC
+import copy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -34,6 +35,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import joblib
 import lightgbm as lgb
 import numpy as np
+import torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -46,6 +48,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import GaussianNB
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +153,317 @@ def build_vector_extractor(config: Optional[Dict]) -> Callable[[np.ndarray], np.
 # ---------------------------------------------------------------------------
 
 
+class TorchMLPClassifier:
+    """Feed-forward neural network classifier backed by PyTorch."""
+
+    def __init__(
+        self,
+        input_dim: Optional[int] = None,
+        hidden_dims: Optional[Sequence[int]] = (128, 64),
+        num_classes: Optional[int] = None,
+        output_dim: Optional[int] = None,
+        activation: str = "relu",
+        dropout: float = 0.0,
+        batch_norm: bool = False,
+        learning_rate: float = 1e-3,
+        weight_decay: float = 0.0,
+        device: Optional[str] = None,
+        default_epochs: int = 20,
+        default_batch_size: int = 32,
+        patience: Optional[int] = None,
+        min_delta: float = 0.0,
+        class_weights: Optional[Sequence[float]] = None,
+        verbose: bool = False,
+    ) -> None:
+        self.input_dim = input_dim
+        self.hidden_dims = list(hidden_dims) if hidden_dims else []
+        self.requested_num_classes = num_classes
+        self.requested_output_dim = output_dim
+        self.activation_name = activation.lower()
+        self.dropout = float(dropout)
+        self.batch_norm = bool(batch_norm)
+        self.learning_rate = float(learning_rate)
+        self.weight_decay = float(weight_decay)
+        if device:
+            self.device = torch.device(device)
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.default_epochs = int(default_epochs)
+        self.default_batch_size = int(default_batch_size)
+        self.default_patience = patience
+        self.min_delta = float(min_delta)
+        self.class_weights = list(class_weights) if class_weights is not None else None
+        self.verbose = bool(verbose)
+
+        self.model: Optional[nn.Module] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.criterion: Optional[nn.Module] = None
+        self.classes_: Optional[np.ndarray] = None
+        self.num_classes_: Optional[int] = None
+        self.input_dim_: Optional[int] = None
+        self.output_dim_: Optional[int] = None
+        self.history_: Dict[str, List[float]] = {}
+
+    @staticmethod
+    def _prepare_feature_array(X: np.ndarray) -> np.ndarray:
+        array = np.asarray(X, dtype=np.float32)
+        if array.ndim == 1:
+            array = array.reshape(1, -1)
+        elif array.ndim > 2:
+            array = array.reshape(array.shape[0], -1)
+        return array
+
+    def _encode_labels(self, labels: np.ndarray) -> np.ndarray:
+        if self.classes_ is None:
+            raise RuntimeError("The model must be fitted before encoding labels.")
+        indices = np.searchsorted(self.classes_, labels)
+        if not np.array_equal(self.classes_[indices], labels):
+            raise ValueError("Found labels that were not observed in the training data.")
+        return indices.astype(np.int64)
+
+    def _build_target_tensor(self, indices: np.ndarray) -> torch.Tensor:
+        if self.output_dim_ == 1:
+            tensor = torch.from_numpy(indices.astype(np.float32)).unsqueeze(1)
+        else:
+            tensor = torch.from_numpy(indices.astype(np.int64))
+        return tensor
+
+    def _build_activation(self) -> nn.Module:
+        activations = {
+            "relu": nn.ReLU(),
+            "gelu": nn.GELU(),
+            "tanh": nn.Tanh(),
+            "leaky_relu": nn.LeakyReLU(),
+            "elu": nn.ELU(),
+        }
+        if self.activation_name not in activations:
+            available = ", ".join(sorted(activations))
+            raise ValueError(
+                f"Unsupported activation '{self.activation_name}'. Available: {available}"
+            )
+        return activations[self.activation_name]
+
+    def _build_model(self) -> nn.Module:
+        if self.input_dim_ is None or self.output_dim_ is None:
+            raise RuntimeError("Model dimensions were not initialised before build.")
+
+        layers: List[nn.Module] = []
+        prev_dim = self.input_dim_
+
+        for hidden_dim in self.hidden_dims:
+            layers.append(nn.Linear(prev_dim, hidden_dim))
+            if self.batch_norm:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(self._build_activation())
+            if self.dropout > 0:
+                layers.append(nn.Dropout(self.dropout))
+            prev_dim = hidden_dim
+
+        layers.append(nn.Linear(prev_dim, self.output_dim_))
+        return nn.Sequential(*layers)
+
+    def _initialise_loss(self) -> None:
+        weight_tensor = None
+        if self.class_weights is not None:
+            weight_tensor = torch.tensor(
+                self.class_weights, dtype=torch.float32, device=self.device
+            )
+
+        if self.output_dim_ == 1:
+            pos_weight = None
+            if weight_tensor is not None and weight_tensor.numel() == 2:
+                neg, pos = weight_tensor.tolist()
+                if neg <= 0 or pos <= 0:
+                    raise ValueError("class_weights values must be > 0.")
+                pos_weight = torch.tensor(pos / neg, dtype=torch.float32, device=self.device)
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            self.criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+
+    def _select_validation_loader(
+        self,
+        eval_set: Optional[Sequence[Tuple[np.ndarray, Optional[np.ndarray]]]],
+        batch_size: int,
+    ) -> Optional[DataLoader]:
+        if not eval_set:
+            return None
+
+        for candidate in eval_set:
+            if len(candidate) < 2:
+                continue
+            val_X, val_y = candidate
+            if val_y is None:
+                continue
+
+            val_array = self._prepare_feature_array(val_X)
+            val_labels = np.asarray(val_y)
+            if val_labels.ndim != 1:
+                val_labels = val_labels.reshape(-1)
+
+            indices = self._encode_labels(val_labels)
+            targets = self._build_target_tensor(indices)
+            dataset = TensorDataset(
+                torch.from_numpy(val_array.astype(np.float32)), targets
+            )
+            return DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        return None
+
+    def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> "TorchMLPClassifier":
+        X_array = self._prepare_feature_array(X)
+
+        y_array = np.asarray(y)
+        if y_array.ndim != 1:
+            y_array = y_array.reshape(-1)
+
+        if X_array.shape[0] != y_array.shape[0]:
+            raise ValueError("X and y must contain the same number of samples.")
+
+        self.classes_ = np.unique(y_array)
+        self.num_classes_ = len(self.classes_)
+        if self.requested_num_classes is not None and self.num_classes_ != int(
+            self.requested_num_classes
+        ):
+            raise ValueError(
+                f"Expected {self.requested_num_classes} classes but found {self.num_classes_}."
+            )
+
+        if self.requested_output_dim is not None:
+            self.output_dim_ = int(self.requested_output_dim)
+        else:
+            self.output_dim_ = 1 if self.num_classes_ == 2 else self.num_classes_
+
+        observed_input_dim = int(X_array.shape[1])
+        if self.input_dim is not None and int(self.input_dim) != observed_input_dim:
+            raise ValueError(
+                f"Configured input_dim={self.input_dim} does not match observed "
+                f"feature size={observed_input_dim}."
+            )
+        self.input_dim_ = int(self.input_dim) if self.input_dim is not None else observed_input_dim
+
+        self.model = self._build_model().to(self.device)
+        self._initialise_loss()
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
+        )
+
+        epochs = int(fit_params.pop("epochs", self.default_epochs))
+        batch_size = int(fit_params.pop("batch_size", self.default_batch_size))
+        patience = fit_params.pop("patience", self.default_patience)
+        eval_set = fit_params.pop("eval_set", None)
+        verbose = bool(fit_params.pop("verbose", self.verbose))
+
+        if fit_params:
+            unused = ", ".join(sorted(fit_params))
+            warnings.warn(f"Unused fit parameters for TorchMLPClassifier: {unused}", UserWarning)
+
+        if batch_size <= 0:
+            batch_size = X_array.shape[0]
+
+        train_indices = self._encode_labels(y_array)
+        train_targets = self._build_target_tensor(train_indices)
+        train_dataset = TensorDataset(
+            torch.from_numpy(X_array.astype(np.float32)), train_targets
+        )
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        val_loader = self._select_validation_loader(eval_set, batch_size)
+
+        self.history_ = {"train_loss": [], "val_loss": []}
+        best_val_loss = float("inf")
+        best_state = None
+        epochs_without_improvement = 0
+
+        for epoch in range(epochs):
+            self.model.train()
+            running_loss = 0.0
+
+            for batch_X, batch_y in train_loader:
+                batch_X = batch_X.to(self.device)
+                batch_y = batch_y.to(self.device)
+
+                self.optimizer.zero_grad()
+                logits = self.model(batch_X)
+                if self.output_dim_ == 1:
+                    loss = self.criterion(logits, batch_y)
+                else:
+                    loss = self.criterion(logits, batch_y.long())
+                loss.backward()
+                self.optimizer.step()
+                running_loss += loss.item() * batch_X.size(0)
+
+            epoch_loss = running_loss / len(train_loader.dataset)
+            self.history_["train_loss"].append(epoch_loss)
+
+            val_loss = None
+            if val_loader is not None:
+                self.model.eval()
+                total = 0
+                accumulated = 0.0
+                with torch.no_grad():
+                    for val_X_batch, val_y_batch in val_loader:
+                        val_X_batch = val_X_batch.to(self.device)
+                        val_y_batch = val_y_batch.to(self.device)
+                        logits = self.model(val_X_batch)
+                        if self.output_dim_ == 1:
+                            loss = self.criterion(logits, val_y_batch)
+                        else:
+                            loss = self.criterion(logits, val_y_batch.long())
+                        accumulated += loss.item() * val_X_batch.size(0)
+                        total += val_X_batch.size(0)
+                val_loss = accumulated / total if total else None
+                self.history_["val_loss"].append(val_loss)
+
+                if val_loss is not None:
+                    improved = val_loss + self.min_delta < best_val_loss
+                    if improved:
+                        best_val_loss = val_loss
+                        best_state = copy.deepcopy(self.model.state_dict())
+                        epochs_without_improvement = 0
+                    else:
+                        epochs_without_improvement += 1
+                        if patience is not None and epochs_without_improvement >= patience:
+                            if verbose:
+                                print(
+                                    f"Early stopping at epoch {epoch + 1} with best val loss {best_val_loss:.4f}"
+                                )
+                            break
+
+            if verbose:
+                message = f"[MLP] Epoch {epoch + 1}/{epochs} - train_loss={epoch_loss:.4f}"
+                if val_loss is not None:
+                    message += f", val_loss={val_loss:.4f}"
+                print(message)
+
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+
+        self.model.eval()
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self.model is None or self.classes_ is None:
+            raise RuntimeError("The model must be fitted before calling predict_proba.")
+
+        feature_array = self._prepare_feature_array(X)
+        features = torch.from_numpy(feature_array.astype(np.float32)).to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(features)
+            if self.output_dim_ == 1:
+                probs_pos = torch.sigmoid(logits).squeeze(1)
+                probs = torch.stack([1 - probs_pos, probs_pos], dim=1)
+            else:
+                probs = torch.softmax(logits, dim=1)
+
+        return probs.cpu().numpy()
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        probabilities = self.predict_proba(X)
+        indices = probabilities.argmax(axis=1)
+        return self.classes_[indices]
+
+
 class AlgorithmFactory:
     """Factory for constructing estimators via a registry."""
 
@@ -163,6 +478,7 @@ class AlgorithmFactory:
             lambda params: LogisticRegression(max_iter=1000, **params),
         )
         self.register("lightgbm", lambda params: lgb.LGBMClassifier(**params))
+        self.register("mlp", lambda params: TorchMLPClassifier(**params))
 
     def register(self, name: str, builder: Callable[[Dict], object]) -> None:
         self._registry[name.lower()] = builder

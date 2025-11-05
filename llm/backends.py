@@ -16,6 +16,45 @@ from utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _resolve_api_key(config: Any, fallback_envs: List[str]) -> str:
+    """Resolve API key from config or environment."""
+    import os
+
+    # Highest priority: explicit api_key field
+    api_key = getattr(config, "api_key", None)
+    if api_key:
+        return api_key
+
+    # Next: environment variable specified in config
+    env_names: List[Optional[str]] = []
+    env_from_config = getattr(config, "api_key_env", None)
+    if env_from_config:
+        env_names.append(env_from_config)
+
+    # Append fallback env vars to check
+    env_names.extend(fallback_envs)
+
+    for env_name in env_names:
+        if not env_name:
+            continue
+        value = os.getenv(env_name)
+        if value:
+            return value
+
+    raise ValueError(
+        "API key 未提供。请在模型配置中设置 api_key，或设置环境变量中的任意一个: "
+        f"{', '.join([name for name in env_names if name])}"
+    )
+
+
+def _get_extra_body(config: Any, kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch extra_body override from kwargs or config."""
+    extra_body = kwargs.get("extra_body")
+    if extra_body is not None:
+        return extra_body
+    return getattr(config, "extra_body", None)
+
+
 class BaseBackend(abc.ABC):
     """LLM后端基类"""
     
@@ -42,30 +81,32 @@ class BaseBackend(abc.ABC):
 class APIBackend(BaseBackend):
     """API后端实现，支持OpenAI、OpenRouter等提供商"""
 
+    ENV_FALLBACKS: List[str] = ["API_KEY"]
+    DEFAULT_BASE_URL: Optional[str] = None
+    PROVIDER_NAME: str = "generic"
+
     def __init__(self, config):
         super().__init__(config)
+        self.provider = getattr(config, "provider", self.PROVIDER_NAME)
+        self.base_url: Optional[str] = None
+        self.api_key: Optional[str] = None
         self._initialize_client()
         
     def _initialize_client(self):
         """初始化API客户端"""
         try:
             import openai  # 假设已安装openai库，支持OpenAI和兼容API
-            import os
-            base_url = self.config.base_url
-            
-            if os.environ['API_KEY'] is None:
-                raise ValueError("API_KEY environment variable not set")
-            if os.environ['API_KEY'] == "":
-                raise ValueError("API_KEY environment variable is empty")
-            
-            print(f"API_KEY={os.environ['API_KEY']}")
+            base_url = self.config.base_url or self.DEFAULT_BASE_URL
+            self.api_key = _resolve_api_key(self.config, self.ENV_FALLBACKS)
+
             self.client = openai.OpenAI(
-                api_key=os.environ['API_KEY'],
+                api_key=self.api_key,
                 base_url=base_url,
             )
+            self.base_url = base_url
             self.model_name = self.config.model_name  # 如 'gpt-4' 或 OpenRouter模型ID
             
-            logger.info(f"API backend initialized for base_url: {self.config.base_url}, model: {self.model_name}")
+            logger.info(f"API backend initialized for base_url: {self.base_url}, model: {self.model_name}")
             
         except ImportError as e:
             logger.error("openai library not installed. Please install it via pip install openai")
@@ -85,12 +126,19 @@ class APIBackend(BaseBackend):
         results = []
         for prompt in prompts:
             try:
+                request_params = {
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+                    "temperature": kwargs.get("temperature", self.config.temperature),
+                    "top_p": kwargs.get("top_p", self.config.top_p),
+                }
+                extra_body = _get_extra_body(self.config, kwargs)
+                if extra_body:
+                    request_params["extra_body"] = extra_body
+
                 response = self.client.completions.create(
-                    model=self.model_name,
-                    prompt=prompt,
-                    max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-                    temperature=kwargs.get("temperature", self.config.temperature),
-                    top_p=kwargs.get("top_p", self.config.top_p),
+                    **request_params
                     # top_k 不直接支持，OpenAI使用n=1模拟
                 )
                 generated_text = response.choices[0].text.strip()
@@ -116,12 +164,19 @@ class APIBackend(BaseBackend):
                 msg_list = [msg_list]
             
             try:
+                request_params = {
+                    "model": self.model_name,
+                    "messages": msg_list,
+                    "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+                    "temperature": kwargs.get("temperature", self.config.temperature),
+                    "top_p": kwargs.get("top_p", self.config.top_p),
+                }
+                extra_body = _get_extra_body(self.config, kwargs)
+                if extra_body:
+                    request_params["extra_body"] = extra_body
+
                 response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=msg_list,
-                    max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-                    temperature=kwargs.get("temperature", self.config.temperature),
-                    top_p=kwargs.get("top_p", self.config.top_p),
+                    **request_params
                 )
                 generated_text = response.choices[0].message.content.strip()
                 results.append(generated_text)
@@ -135,14 +190,23 @@ class APIBackend(BaseBackend):
         """获取API模型信息"""
         return {
             "backend": "api",
-            "provider": self.provider,
+            "provider": getattr(self, "provider", self.PROVIDER_NAME),
             "model_name": self.model_name,
+            "base_url": self.base_url,
         }
     
     def shutdown(self):
         """关闭API后端"""
         self.client = None
         logger.info("API backend shutdown")
+
+
+class AliyunDashScopeBackend(APIBackend):
+    """阿里云百炼DashScope兼容后端"""
+
+    ENV_FALLBACKS = ["DASHSCOPE_API_KEY", "API_KEY"]
+    DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    PROVIDER_NAME = "aliyuncs"
 
 class VLLMBackend(BaseBackend):
     """vLLM后端实现"""

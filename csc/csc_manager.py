@@ -85,7 +85,10 @@ class CSCManager:
             logger.info("DatasetManager初始化完成")
             
             # 初始化提示管理器
-            self.prompt_manager = PromptManager(self.config['prompts']['file_path'], self.config['prompts']['tokenizer_path'])
+            prompts_config = self.config.get('prompts', {})
+            prompt_file = prompts_config.get('file_path')
+            tokenizer_path = prompts_config.get('tokenizer_path')
+            self.prompt_manager = PromptManager(prompt_file, tokenizer_path)
             logger.info("PromptManager初始化完成")
             
             # 初始化LLM管理器
@@ -221,10 +224,12 @@ class CSCManager:
                 # 格式化提示
                 split_char = self.config['pipeline'].get('split_token', False)
                 source = item['source']
-                target = item['target']
+                target = item.get('target', "")
+                if target is None:
+                    target = ""
                 if split_char:
-                    source = split_char.join(item['source']) if split_char else item['source']
-                    target = split_char.join(item['target']) if split_char else item['target']
+                    source = split_char.join(source) if split_char else source
+                    target = split_char.join(target) if split_char else target
                 mark = self.config['pipeline'].get('mark', False)
                 if mark:
                     source = self.string_marker(source, target)
@@ -236,6 +241,7 @@ class CSCManager:
                 prompts.append({
                     'source': item['source'],
                     'target': item['target'],
+                    'reason': item.get('reason'),
                     'prompt': formatted_prompt,
                 })
             
@@ -311,6 +317,7 @@ class CSCManager:
                     result = {
                         'source': item['source'],
                         'target': item['target'],
+                        'reason': item.get('reason'),
                         'prediction': pred,
                         'prompt': item['prompt'],
                         'timestamp': datetime.now().isoformat()
